@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "sonic.apex",
+  "name": "Apex Keyboard",
+  "version": "1.0.0",
+  "author": "davidzu",
+  "license": "MIT",
+  "description": "Control SteelSeries Apex 7 TKL RGB, OLED, and the scroll wheel from the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Apex Keyboard",
+    "description": "RGB effects, OLED pages, and wheel modes for the Apex 7 TKL",
+    "category": "System",
+    "aliases": ["apex", "keyboard", "steelseries", "oled", "rgb"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

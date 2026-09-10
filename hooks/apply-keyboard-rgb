@@ -1,0 +1,6 @@
+#!/bin/bash
+# Re-apply the current Omarchy theme to the Apex whenever the theme changes.
+if command -v apexctl >/dev/null; then
+  apexctl rgb theme >/dev/null 2>&1 || true
+  apexctl oled logo >/dev/null 2>&1 || true
+fi

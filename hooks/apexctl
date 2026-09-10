@@ -1,0 +1,3 @@
+#!/bin/bash
+# Start the Apex control daemon after the desktop comes up.
+systemctl --user start apexctl.service 2>/dev/null || true

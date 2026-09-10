@@ -1,0 +1,72 @@
+#!/bin/bash
+# Install apexctl onto PATH, enable the user daemon, and register Omarchy hooks.
+# Idempotent. The bar widget runs this with --silent on first load.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$SCRIPT_DIR/bin/apexctl"
+SILENT=0
+[[ "${1:-}" == "--silent" ]] && SILENT=1
+
+say() { (( SILENT )) || echo "$*"; }
+
+link_cli() {
+  local dir="$1"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  local target="$dir/apexctl"
+  if [[ -L $target ]]; then
+    [[ "$(readlink -f "$target")" == "$(readlink -f "$BIN")" ]] && return 0
+    rm -f "$target"
+  elif [[ -e $target ]]; then
+    [[ -e $target.bak ]] || mv "$target" "$target.bak"
+  fi
+  ln -s "$BIN" "$target"
+}
+
+install_unit() {
+  local dest="$HOME/.config/systemd/user/apexctl.service"
+  mkdir -p "$HOME/.config/systemd/user"
+  cp "$SCRIPT_DIR/systemd/apexctl.service" "$dest"
+  systemctl --user daemon-reload
+  systemctl --user enable --now apexctl.service >/dev/null
+}
+
+install_hooks() {
+  command -v omarchy >/dev/null || return 0
+  omarchy hook install theme-set "$SCRIPT_DIR/hooks/apply-keyboard-rgb" >/dev/null
+  omarchy hook install post-boot "$SCRIPT_DIR/hooks/apexctl" >/dev/null
+}
+
+if [[ ! -x $BIN ]]; then
+  chmod +x "$BIN" "$SCRIPT_DIR/bin/apex/"*.py 2>/dev/null || true
+  chmod +x "$BIN"
+fi
+
+if link_cli "$HOME/.local/bin"; then
+  say "Installed apexctl into $HOME/.local/bin"
+else
+  echo "Could not write $HOME/.local/bin/apexctl" >&2
+  exit 1
+fi
+
+install_unit
+say "Enabled systemd --user apexctl.service"
+install_hooks
+say "Installed theme-set and post-boot hooks"
+
+# Hint if the OLED hidraw is present but not writable.
+if ! python3 - "$SCRIPT_DIR" >/dev/null 2>&1 <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "bin"))
+from apex.oled import find_oled_hidraw
+path = find_oled_hidraw()
+sys.exit(0 if path and os.access(path, os.W_OK) else 1)
+PY
+then
+  say "OLED hidraw is not writable yet. Install udev rules:"
+  say "  sudo cp $SCRIPT_DIR/udev/99-steelseries-apex.rules /etc/udev/rules.d/"
+  say "  sudo udevadm control --reload && sudo udevadm trigger"
+fi
+
+exit 0

@@ -1,0 +1,13 @@
+[Unit]
+Description=Apex 7 TKL control daemon (RGB, OLED, wheel)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/apexctl daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
