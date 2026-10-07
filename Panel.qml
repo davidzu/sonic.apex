@@ -5,48 +5,6 @@ import Quickshell.Io
 import qs.Ui
 import qs.Commons
 
-// Drawn keyboard icon: rounded body outline, two rows of keys, a spacebar
-// flanked by modifier keys. Scales to the slot and follows the theme color.
-component KeyboardGlyph: Canvas {
-  id: glyph
-  property color inkColor: "#ffffff"
-  onInkColorChanged: requestPaint()
-  onWidthChanged: requestPaint()
-  onHeightChanged: requestPaint()
-
-  onPaint: {
-    var ctx = getContext("2d")
-    ctx.reset()
-    var u = Math.min(width / 24, height / 24)
-    if (u <= 0) return
-    var ink = String(inkColor)
-    ctx.strokeStyle = ink
-    ctx.fillStyle = ink
-    ctx.lineWidth = Math.max(1.2, 1.6 * u)
-
-    // Body outline: 22u x 10u, centered in the slot
-    var kw = 22 * u, kh = 10 * u
-    var x = (width - kw) / 2, y = (height - kh) / 2
-    ctx.strokeRect(x, y, kw, kh)
-
-    // Two rows of six keys
-    var dashW = 2 * u, dashH = 1.3 * u, gap = 1.2 * u, pad = 1.8 * u
-    var r1 = y + pad, r2 = y + pad + dashH + 1.2 * u
-    for (var c = 0; c < 6; c++) {
-      var kx = x + pad + c * (dashW + gap)
-      ctx.fillRect(kx, r1, dashW, dashH)
-      ctx.fillRect(kx, r2, dashW, dashH)
-    }
-
-    // Bottom row: two keys, wide spacebar, two keys
-    var sy = y + pad + 2 * (dashH + 1.2 * u)
-    var fW = 2.4 * u, sbW = 10 * u
-    ctx.fillRect(x + pad, sy, fW, dashH)
-    ctx.fillRect(x + (kw - sbW) / 2, sy, sbW, dashH)
-    ctx.fillRect(x + kw - pad - fW, sy, fW, dashH)
-  }
-}
-
 Panel {
   id: root
   moduleName: "sonic.apex"
@@ -151,7 +109,7 @@ Panel {
     iconComponent: Component {
       KeyboardGlyph {
         anchors.fill: parent
-        inkColor: button.foreground
+        ink: button.foreground
       }
     }
     onPressed: function(b) { root.toggle() }
@@ -185,7 +143,7 @@ Panel {
             id: heroIcon
             width: Style.font.display * 1.3
             height: Style.font.display * 1.3
-            inkColor: root.bar.foreground
+            ink: root.bar.foreground
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
           }
