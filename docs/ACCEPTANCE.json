@@ -1,0 +1,6 @@
+{
+  "omarchyVersion": null,
+  "portableChecks": null,
+  "liveChecks": [],
+  "notes": "No acceptance evidence recorded yet. Run ./tests/run, omarchy plugin validate ., and the live checks in docs/DEVELOPMENT.md, then fill this in."
+}

@@ -1,6 +1,7 @@
-# Apex Keyboard
+<h1 align="center">Apex Keyboard</h1>
 
-Omarchy shell plugin for the **SteelSeries Apex 7 / Apex 7 TKL**: per-key RGB, the 128×40 OLED, and the OLED scroll wheel.
+<p align="center">Omarchy shell plugin for the SteelSeries Apex 7 / Apex 7 TKL:
+per-key RGB, the 128×40 OLED, and the OLED scroll wheel.</p>
 
 ## Install
 
@@ -8,7 +9,8 @@ Omarchy shell plugin for the **SteelSeries Apex 7 / Apex 7 TKL**: per-key RGB, t
 omarchy plugin add https://github.com/davidzu/sonic.apex.git --enable
 ```
 
-That clones the plugin, validates it, and enables the bar widget. On first load the panel:
+That clones the plugin, validates it, and enables the bar widget. On first
+load the panel:
 
 - puts `apexctl` on `PATH` (`~/.local/bin`)
 - enables the `apexctl` user systemd service
@@ -47,7 +49,8 @@ systemctl --user enable --now openrgb.service
 
 ### HID permissions
 
-The OLED talks to USB HID interface 1. If `apexctl oled clock` says the hidraw is missing or not writable:
+The OLED talks to USB HID interface 1. If `apexctl oled clock` says the
+hidraw is missing or not writable:
 
 ```bash
 sudo cp ~/.config/omarchy/plugins/sonic.apex/udev/99-steelseries-apex.rules /etc/udev/rules.d/
@@ -58,38 +61,37 @@ Unplug/replug the keyboard if it still cannot open the device.
 
 ## Use it
 
-Click the keyboard icon in the bar, or:
+Click the **Apex Keyboard** widget in the bar (right section) to open the
+panel: RGB effects, OLED pages (clock, media, system), and wheel modes.
+
+CLI examples:
 
 ```bash
-apexctl status
-apexctl rgb theme|solid|wave|breathe|rainbow|reactive|off
-apexctl rgb solid -c '#89b4fa' -b 70
-apexctl rgb -k 'Enter=#f38ba8' -k 'Space=#89b4fa'
-apexctl oled clock|now-playing|workspace|logo|text|clear
-apexctl oled --text 'hello'
-apexctl oled --image ~/Pictures/logo.png
-apexctl wheel volume|workspace|brightness|oled|rgb
+apexctl rgb wave --speed 2
+apexctl oled clock
+apexctl wheel mode media
 ```
 
-Config lives in `~/.config/omarchy/apex.json` (created on first run).
+## Development
 
-Wheel default is **volume** (Hyprland already binds `XF86Audio*`). Other modes grab the roller so it does not also change volume. Click the wheel to mute / cycle.
-
-## Uninstall
+Run the portable checks from the repository root:
 
 ```bash
-~/.config/omarchy/plugins/sonic.apex/uninstall
-omarchy plugin remove sonic.apex
+./tests/run
 ```
 
-## Manual / local checkout
+On the target Omarchy machine also run `omarchy plugin validate .` and record
+the installed `omarchy-version`. Portable validation covers structure and
+metadata only; it does not establish live desktop compatibility. Record
+actual tests in [docs/ACCEPTANCE.json](docs/ACCEPTANCE.json).
 
-```bash
-git clone https://github.com/davidzu/sonic.apex.git ~/.config/omarchy/plugins/sonic.apex
-~/.config/omarchy/plugins/sonic.apex/install
-omarchy plugin enable sonic.apex --section right
-```
+[Architecture](ARCHITECTURE.md) · [Developing](docs/DEVELOPMENT.md) · [Release process](docs/RELEASE.md) · [Contributing](CONTRIBUTING.md)
 
-## License
+## Credits
 
-MIT
+Built from [omarchy-plugin-template](https://github.com/tcballard/omarchy-plugin-template)
+guidance and the Omarchy template set. See [CREDITS.md](CREDITS.md).
+
+## Licence
+
+[MIT](LICENSE).
