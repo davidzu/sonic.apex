@@ -51,6 +51,8 @@ def _print_status(data, as_json=False):
     print(f"rgb        {rgb.get('mode')}  brightness={rgb.get('brightness')}  speed={rgb.get('speed')}")
     if rgb.get("mode") == "solid":
         print(f"solid      {rgb.get('solid')}")
+    if rgb.get("mode") == "gradient":
+        print(f"profile    {rgb.get('profile')}")
     print(f"oled page  {oled_cfg.get('page')}")
     print(f"wheel      {wheel.get('mode')}")
 
@@ -93,6 +95,8 @@ def _local_rgb(cfg, req):
         rgb["mode"] = req["mode"]
     if "solid" in req:
         rgb["solid"] = req["solid"]
+    if "profile" in req:
+        rgb["profile"] = req["profile"]
     if "brightness" in req:
         rgb["brightness"] = int(req["brightness"])
     if "speed" in req:
@@ -102,7 +106,7 @@ def _local_rgb(cfg, req):
     if req.get("clear_keys"):
         rgb["keys"] = {}
     palette = rgbmod.load_palette()
-    colors = rgbmod.effect_colors(rgb["mode"], 0, palette, rgb["solid"], rgb["brightness"])
+    colors = rgbmod.effect_colors(rgb["mode"], 0, palette, rgb["solid"], rgb["brightness"], profile=rgb.get("profile"))
     colors = rgbmod.apply_key_overrides(colors, rgb.get("keys"))
     client = rgbmod.OpenRGB()
     try:
@@ -149,6 +153,11 @@ def cmd_rgb(args):
     if args.color:
         req["solid"] = args.color
         req.setdefault("mode", "solid")
+    if args.profile:
+        if args.profile not in rgbmod.PROFILES:
+            raise SystemExit(f"unknown profile {args.profile}; choose from {', '.join(rgbmod.PROFILES)}")
+        req["profile"] = args.profile
+        req.setdefault("mode", "gradient")
     if args.brightness is not None:
         req["brightness"] = args.brightness
     if args.speed is not None:
@@ -220,6 +229,11 @@ def cmd_keys(_args):
         print(name)
 
 
+def cmd_profiles(_args):
+    for name, hexes in rgbmod.PROFILES.items():
+        print(f"{name:10s} {' '.join(hexes)}")
+
+
 def cmd_daemon(_args):
     from .daemon import run
     run()
@@ -237,6 +251,7 @@ def build_parser():
     rg = sub.add_parser("rgb", help="set lighting mode, color, or per-key overrides")
     rg.add_argument("mode", nargs="?", choices=RGB_MODES)
     rg.add_argument("-c", "--color", help="solid hex color, e.g. #89b4fa")
+    rg.add_argument("-p", "--profile", help="color profile for gradient mode (see: apexctl profiles)")
     rg.add_argument("-b", "--brightness", type=int)
     rg.add_argument("-s", "--speed", type=int)
     rg.add_argument("-k", "--key", action="append", help="Key=#RRGGBB (repeatable)")
@@ -261,6 +276,9 @@ def build_parser():
 
     ky = sub.add_parser("keys", help="list OpenRGB LED names")
     ky.set_defaults(func=cmd_keys)
+
+    pf = sub.add_parser("profiles", help="list gradient color profiles")
+    pf.set_defaults(func=cmd_profiles)
 
     da = sub.add_parser("daemon", help="run the RGB / OLED / wheel daemon")
     da.set_defaults(func=cmd_daemon)

@@ -20,7 +20,8 @@ Panel {
     daemon: false
   })
 
-  readonly property var rgbModes: ["theme", "solid", "wave", "breathe", "rainbow", "reactive", "off"]
+  readonly property var rgbModes: ["theme", "solid", "gradient", "wave", "breathe", "rainbow", "reactive", "off"]
+  readonly property var rgbProfiles: ["sunset", "ocean", "fire", "matrix", "cyberpunk", "aurora", "candy", "ice", "vaporwave", "gold"]
   readonly property var oledPages: ["clock", "now-playing", "workspace", "logo", "text", "clear"]
   readonly property var wheelModes: ["volume", "workspace", "brightness", "oled", "rgb"]
 
@@ -216,6 +217,27 @@ Panel {
             fontSize: Style.font.caption
             bordered: true
             onClicked: root.apex(["rgb", "theme"])
+          }
+        }
+
+        PanelSeparator { foreground: root.bar.foreground }
+        PanelSectionHeader { text: "GRADIENT PROFILES"; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily }
+
+        Flow {
+          width: parent.width
+          spacing: Style.spacing.xs
+          Repeater {
+            model: root.rgbProfiles
+            Button {
+              required property string modelData
+              text: root.pretty(modelData)
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              fontSize: Style.font.caption
+              bordered: true
+              active: root.status.rgb && root.status.rgb.mode === "gradient" && root.status.rgb.profile === modelData
+              onClicked: root.apex(["rgb", "gradient", "-p", modelData])
+            }
           }
         }
 

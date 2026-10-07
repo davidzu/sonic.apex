@@ -75,6 +75,38 @@ def load_palette(path=THEME_COLORS):
     }
 
 
+# Named multi-color profiles for the `gradient` mode. Each list is sampled
+# cyclically across the keyboard width and drifts slowly over time.
+PROFILES = {
+    "sunset": ("#f97316", "#ec4899", "#8b5cf6"),
+    "ocean": ("#0ea5e9", "#06b6d4", "#14b8a6"),
+    "fire": ("#facc15", "#f97316", "#dc2626"),
+    "matrix": ("#166534", "#22c55e", "#86efac"),
+    "cyberpunk": ("#22d3ee", "#e879f9", "#a21caf"),
+    "aurora": ("#34d399", "#22d3ee", "#818cf8"),
+    "candy": ("#f472b6", "#c084fc", "#60a5fa"),
+    "ice": ("#e0f2fe", "#7dd3fc", "#38bdf8"),
+    "vaporwave": ("#ff71ce", "#01cdfe", "#05ffa1"),
+    "gold": ("#fef08a", "#f59e0b", "#78350f"),
+}
+
+
+def profile_colors(name):
+    """Hex list for a profile name; falls back to sunset."""
+    for hexes in PROFILES.get(name, PROFILES["sunset"]):
+        yield parse_hex(hexes)
+
+
+def sample_gradient(colors, p):
+    """Sample a cyclic multi-stop gradient at position p in [0, 1)."""
+    n = len(colors)
+    p = p % 1.0
+    f = p * n
+    i = int(f)
+    j = (i + 1) % n
+    return mix(colors[i], colors[j], f - i)
+
+
 def theme_color_for(key, palette):
     if key in MODS or key in FNROW:
         return palette["accent"]
@@ -189,10 +221,11 @@ class OpenRGB:
         self.drain()
 
 
-def effect_colors(mode, t, palette, solid, brightness, reactive_keys=None):
+def effect_colors(mode, t, palette, solid, brightness, reactive_keys=None, profile=None):
     """Return per-LED RGB tuples for the given effect at time t (seconds)."""
     solid_c = parse_hex(solid, palette["accent"])
     reactive_keys = reactive_keys or {}
+    profile_c = list(profile_colors(profile)) if profile else list(profile_colors("sunset"))
     colors = []
     for name in LEDS:
         x, y = XY[name]
@@ -200,6 +233,9 @@ def effect_colors(mode, t, palette, solid, brightness, reactive_keys=None):
             color = (0, 0, 0)
         elif mode == "solid":
             color = solid_c
+        elif mode == "gradient":
+            p = x / max(MAX_X, 1) - t * 0.06 - y / max(MAX_Y, 1) * 0.15
+            color = sample_gradient(profile_c, p)
         elif mode == "theme":
             color = theme_color_for(name, palette)
         elif mode == "wave":

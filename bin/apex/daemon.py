@@ -224,6 +224,8 @@ class Daemon:
             rgb["mode"] = req["mode"]
         if "solid" in req:
             rgb["solid"] = req["solid"]
+        if "profile" in req and req["profile"] in rgbmod.PROFILES:
+            rgb["profile"] = req["profile"]
         if "brightness" in req:
             rgb["brightness"] = int(max(0, min(100, int(req["brightness"]))))
         if "speed" in req:
@@ -368,6 +370,7 @@ class Daemon:
                 self.cfg["rgb"]["solid"],
                 self.cfg["rgb"]["brightness"],
                 reactive_keys=ages if mode == "reactive" else (ages if ages and mode == "theme" else {}),
+                profile=self.cfg["rgb"].get("profile"),
             )
             colors = rgbmod.apply_key_overrides(colors, self.cfg["rgb"].get("keys"))
             self.openrgb.set_colors(colors)

@@ -18,6 +18,7 @@ DEFAULT = {
     "rgb": {
         "mode": "theme",
         "solid": "#89b4fa",
+        "profile": "sunset",
         "brightness": 80,
         "speed": 45,
         "keys": {},

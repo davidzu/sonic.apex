@@ -100,6 +100,6 @@ KEYCODE_TO_LED = {
     126: "Right Windows", 164: "Media Play/Pause",
 }
 
-RGB_MODES = ("theme", "solid", "wave", "breathe", "rainbow", "reactive", "off")
+RGB_MODES = ("theme", "solid", "gradient", "wave", "breathe", "rainbow", "reactive", "off")
 OLED_PAGES = ("clock", "now-playing", "workspace", "logo", "text", "clear")
 WHEEL_MODES = ("volume", "workspace", "brightness", "oled", "rgb")
