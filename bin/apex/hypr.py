@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
+
+_CACHE_TTL = 0.6
+_cache = {"at": 0.0, "value": None}
 
 
 def _hypr(*args, timeout=0.3):
@@ -13,7 +17,7 @@ def _hypr(*args, timeout=0.3):
         return ""
 
 
-def active():
+def _query():
     ws = {}
     win = {}
     try:
@@ -28,6 +32,17 @@ def active():
     title = str(win.get("title") or "")
     klass = str(win.get("class") or "")
     return {"workspace": name, "window": title, "class": klass}
+
+
+def active():
+    """Active workspace/window, cached briefly to avoid a hyprctl per OLED frame."""
+    now = time.monotonic()
+    if _cache["value"] is not None and now - _cache["at"] < _CACHE_TTL:
+        return _cache["value"]
+    value = _query()
+    _cache["value"] = value
+    _cache["at"] = now
+    return value
 
 
 def dispatch(command):

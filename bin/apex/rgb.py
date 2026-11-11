@@ -206,9 +206,14 @@ class OpenRGB:
                 name = ""
             if "steelseries" in name.lower() or "apex" in name.lower():
                 return i, name
-        if count:
+        # Only fall back when there is no ambiguity: driving an unrelated RGB
+        # controller (motherboard, RAM, another keyboard) would be worse than
+        # reporting the missing keyboard.
+        if count == 1:
             return 0, self.dev_name(0)
-        raise RuntimeError("No OpenRGB devices found")
+        raise RuntimeError(
+            f"No SteelSeries Apex controller found among {count} OpenRGB devices"
+        )
 
     def set_colors(self, colors, zone=0):
         idx = self.device[0]

@@ -32,18 +32,34 @@ def blank(color=0):
     return Image.new("L", (OLED_WIDTH, OLED_HEIGHT), color)
 
 
+_WIDTH_CACHE = {}
+
+
 def _text_width(draw, text, font):
+    key = (id(font), text)
+    cached = _WIDTH_CACHE.get(key)
+    if cached is not None:
+        return cached
     box = draw.textbbox((0, 0), text, font=font)
-    return box[2] - box[0]
+    width = box[2] - box[0]
+    if len(_WIDTH_CACHE) > 256:
+        _WIDTH_CACHE.clear()
+    _WIDTH_CACHE[key] = width
+    return width
 
 
 def _blit_text(draw, xy, text, font, fill=255):
     draw.text(xy, text, font=font, fill=fill)
 
 
+_MEASURE = None
+
+
 def _scroll_x(text, font, t, speed=28, pad=16):
-    dummy = ImageDraw.Draw(blank())
-    width = _text_width(dummy, text, font)
+    global _MEASURE
+    if _MEASURE is None:
+        _MEASURE = ImageDraw.Draw(blank())
+    width = _text_width(_MEASURE, text, font)
     if width <= OLED_WIDTH - 4:
         return 2
     span = width + pad + OLED_WIDTH
@@ -86,12 +102,27 @@ def workspace(name, title, t=0.0):
     return text_page(label, t=0, subtitle=title or "")
 
 
+_IMAGE_CACHE = {"key": None, "image": None}
+
+
 def image_page(path):
     path = os.path.expanduser(path or LOGO_FALLBACK)
     if not os.path.isfile(path):
         return text_page("no image")
-    src = Image.open(path).convert("L")
-    src = ImageOps.contain(src, (OLED_WIDTH, OLED_HEIGHT), Image.Resampling.LANCZOS)
+    # The logo page redraws twice a second; re-decode only when the file changes.
+    try:
+        stat = os.stat(path)
+        key = (path, stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = None
+    if key is None or _IMAGE_CACHE["key"] != key:
+        with Image.open(path) as handle:
+            src = handle.convert("L")
+        src = ImageOps.contain(src, (OLED_WIDTH, OLED_HEIGHT), Image.Resampling.LANCZOS)
+        _IMAGE_CACHE["key"] = key
+        _IMAGE_CACHE["image"] = src
+    else:
+        src = _IMAGE_CACHE["image"]
     im = blank()
     x = (OLED_WIDTH - src.size[0]) // 2
     y = (OLED_HEIGHT - src.size[1]) // 2

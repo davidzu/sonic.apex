@@ -1,6 +1,7 @@
 #!/bin/bash
 # Re-apply the current Omarchy theme to the Apex whenever the theme changes.
+# `reload` re-reads the palette and re-pushes the user's current mode/page —
+# it must not switch the OLED page or reset the RGB mode.
 if command -v apexctl >/dev/null; then
-  apexctl rgb theme >/dev/null 2>&1 || true
-  apexctl oled logo >/dev/null 2>&1 || true
+  apexctl reload >/dev/null 2>&1 || true
 fi

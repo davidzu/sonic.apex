@@ -12,9 +12,18 @@ import sys
 from . import __version__
 from . import config as cfgmod
 from . import oled
-from . import render
 from . import rgb as rgbmod
 from .layout import LEDS, OLED_PAGES, RGB_MODES, WHEEL_MODES
+
+# The daemon owns device state; the CLI only talks to it over the socket.
+
+
+class ApexError(SystemExit):
+    """User-facing failure: printed without a traceback."""
+
+    def __init__(self, message, code=1):
+        super().__init__(f"apexctl: {message}")
+        self.exit_code = code
 
 
 def _talk(req, timeout=2.0):
@@ -55,6 +64,8 @@ def _print_status(data, as_json=False):
         print(f"profile    {rgb.get('profile')}")
     print(f"oled page  {oled_cfg.get('page')}")
     print(f"wheel      {wheel.get('mode')}")
+    if data.get("daemon") is False:
+        print("daemon     offline (one-shot commands still work)")
 
 
 def cmd_status(args):
@@ -72,21 +83,35 @@ def cmd_status(args):
             "oled_hid": oled.find_oled_hidraw(),
             "daemon": False,
         }
-        if not args.json:
-            print("daemon     offline (one-shot commands still work)")
     else:
         data["daemon"] = True
     _print_status(data, as_json=args.json)
 
 
+def _run_local(local_fn, req):
+    """Apply a change without the daemon, reporting device errors cleanly."""
+    cfg = cfgmod.load()
+    try:
+        local_fn(cfg, req)
+    except (OSError, RuntimeError) as exc:
+        # ConnectionRefusedError is an OSError; FileNotFoundError too.
+        hint = ""
+        if isinstance(exc, ConnectionRefusedError):
+            hint = " — is OpenRGB running? (systemctl --user start openrgb.service)"
+        elif isinstance(exc, FileNotFoundError) and "OLED" in str(exc):
+            hint = " — install udev/99-steelseries-apex.rules and replug the keyboard"
+        raise ApexError(f"{exc}{hint}") from exc
+    cfgmod.save(cfg)
+    return {"ok": True, "daemon": False, **cfg}
+
+
 def _dispatch_or_local(req, local_fn):
     data = _talk(req)
     if data is not None:
+        if data.get("ok") is False:
+            raise ApexError(data.get("error", "command failed"))
         return data
-    cfg = cfgmod.load()
-    local_fn(cfg, req)
-    cfgmod.save(cfg)
-    return {"ok": True, "daemon": False, **cfg}
+    return _run_local(local_fn, req)
 
 
 def _local_rgb(cfg, req):
@@ -98,15 +123,17 @@ def _local_rgb(cfg, req):
     if "profile" in req:
         rgb["profile"] = req["profile"]
     if "brightness" in req:
-        rgb["brightness"] = int(req["brightness"])
+        rgb["brightness"] = int(max(0, min(100, int(req["brightness"]))))
     if "speed" in req:
-        rgb["speed"] = int(req["speed"])
+        rgb["speed"] = int(max(1, min(100, int(req["speed"]))))
     if "keys" in req:
         rgb.setdefault("keys", {}).update(req["keys"])
     if req.get("clear_keys"):
         rgb["keys"] = {}
     palette = rgbmod.load_palette()
-    colors = rgbmod.effect_colors(rgb["mode"], 0, palette, rgb["solid"], rgb["brightness"], profile=rgb.get("profile"))
+    colors = rgbmod.effect_colors(
+        rgb["mode"], 0, palette, rgb["solid"], rgb["brightness"], profile=rgb.get("profile")
+    )
     colors = rgbmod.apply_key_overrides(colors, rgb.get("keys"))
     client = rgbmod.OpenRGB()
     try:
@@ -117,7 +144,8 @@ def _local_rgb(cfg, req):
 
 
 def _local_oled(cfg, req):
-    from . import hypr, mpris
+    from . import hypr, mpris, render  # Pillow is only needed for drawing
+
     oled_cfg = cfg["oled"]
     if "page" in req:
         oled_cfg["page"] = req["page"]
@@ -148,28 +176,28 @@ def cmd_rgb(args):
     req = {"cmd": "rgb"}
     if args.mode:
         if args.mode not in RGB_MODES:
-            raise SystemExit(f"unknown mode {args.mode}; choose from {', '.join(RGB_MODES)}")
+            raise ApexError(f"unknown mode {args.mode}; choose from {', '.join(RGB_MODES)}")
         req["mode"] = args.mode
     if args.color:
         req["solid"] = args.color
         req.setdefault("mode", "solid")
     if args.profile:
         if args.profile not in rgbmod.PROFILES:
-            raise SystemExit(f"unknown profile {args.profile}; choose from {', '.join(rgbmod.PROFILES)}")
+            raise ApexError(f"unknown profile {args.profile}; choose from {', '.join(rgbmod.PROFILES)}")
         req["profile"] = args.profile
         req.setdefault("mode", "gradient")
     if args.brightness is not None:
-        req["brightness"] = args.brightness
+        req["brightness"] = max(0, min(100, args.brightness))
     if args.speed is not None:
-        req["speed"] = args.speed
+        req["speed"] = max(1, min(100, args.speed))
     if args.key:
         keys = {}
         for item in args.key:
             if "=" not in item:
-                raise SystemExit("key override must be Name=#RRGGBB")
+                raise ApexError("key override must be Name=#RRGGBB")
             name, color = item.split("=", 1)
             if name not in LEDS:
-                raise SystemExit(f"unknown key {name}")
+                raise ApexError(f"unknown key {name}")
             keys[name] = color
         req["keys"] = keys
     if args.clear_keys:
@@ -195,7 +223,7 @@ def cmd_oled(args):
     if args.next or args.prev:
         data = _talk(req)
         if data is None:
-            raise SystemExit("oled next/prev needs the apexctl daemon")
+            raise ApexError("oled next/prev needs the apexctl daemon")
     else:
         data = _dispatch_or_local(req, _local_oled)
     if args.json:
@@ -207,10 +235,12 @@ def cmd_wheel(args):
     req = {"cmd": "wheel"}
     if args.mode:
         if args.mode not in WHEEL_MODES:
-            raise SystemExit(f"unknown wheel mode {args.mode}; choose from {', '.join(WHEEL_MODES)}")
+            raise ApexError(f"unknown wheel mode {args.mode}; choose from {', '.join(WHEEL_MODES)}")
         req["mode"] = args.mode
     if args.invert is not None:
         req["invert"] = args.invert
+    if args.grab_pointer is not None:
+        req["grab_pointer"] = args.grab_pointer
     data = _talk(req)
     if data is None:
         cfg = cfgmod.load()
@@ -218,10 +248,31 @@ def cmd_wheel(args):
             cfg["wheel"]["mode"] = args.mode
         if args.invert is not None:
             cfg["wheel"]["invert"] = args.invert
+        if args.grab_pointer is not None:
+            cfg["wheel"]["grab_pointer"] = args.grab_pointer
         cfgmod.save(cfg)
         print("saved wheel config; start the daemon to apply (systemctl --user start apexctl)")
         return
     print(f"wheel mode {data.get('wheel', {}).get('mode')}")
+
+
+def cmd_reload(_args):
+    data = _talk({"cmd": "reload"})
+    if data is None:
+        print("daemon offline; settings apply on next start")
+        return
+    print("reloaded theme palette and re-pushed current state")
+
+
+def cmd_modes(_args):
+    payload = {
+        "rgbModes": list(RGB_MODES),
+        "profiles": list(rgbmod.PROFILES),
+        "oledPages": list(OLED_PAGES),
+        "wheelModes": list(WHEEL_MODES),
+    }
+    json.dump(payload, sys.stdout, indent=2)
+    sys.stdout.write("\n")
 
 
 def cmd_keys(_args):
@@ -236,6 +287,7 @@ def cmd_profiles(_args):
 
 def cmd_daemon(_args):
     from .daemon import run
+
     run()
 
 
@@ -252,8 +304,8 @@ def build_parser():
     rg.add_argument("mode", nargs="?", choices=RGB_MODES)
     rg.add_argument("-c", "--color", help="solid hex color, e.g. #89b4fa")
     rg.add_argument("-p", "--profile", help="color profile for gradient mode (see: apexctl profiles)")
-    rg.add_argument("-b", "--brightness", type=int)
-    rg.add_argument("-s", "--speed", type=int)
+    rg.add_argument("-b", "--brightness", type=int, help="0-100")
+    rg.add_argument("-s", "--speed", type=int, help="1-100")
     rg.add_argument("-k", "--key", action="append", help="Key=#RRGGBB (repeatable)")
     rg.add_argument("--clear-keys", action="store_true")
     rg.add_argument("--json", action="store_true")
@@ -272,22 +324,27 @@ def build_parser():
     wh.add_argument("mode", nargs="?", choices=WHEEL_MODES)
     wh.add_argument("--invert", action="store_true", default=None)
     wh.add_argument("--no-invert", dest="invert", action="store_false")
+    wh.add_argument("--grab-pointer", action="store_true", default=None)
+    wh.add_argument("--no-grab-pointer", dest="grab_pointer", action="store_false")
     wh.set_defaults(func=cmd_wheel)
 
-    ky = sub.add_parser("keys", help="list OpenRGB LED names")
-    ky.set_defaults(func=cmd_keys)
-
-    pf = sub.add_parser("profiles", help="list gradient color profiles")
-    pf.set_defaults(func=cmd_profiles)
-
-    da = sub.add_parser("daemon", help="run the RGB / OLED / wheel daemon")
-    da.set_defaults(func=cmd_daemon)
+    sub.add_parser("reload", help="re-read the theme palette and re-push state").set_defaults(func=cmd_reload)
+    sub.add_parser("modes", help="list modes, pages, and profiles as JSON").set_defaults(func=cmd_modes)
+    sub.add_parser("keys", help="list OpenRGB LED names").set_defaults(func=cmd_keys)
+    sub.add_parser("profiles", help="list gradient color profiles").set_defaults(func=cmd_profiles)
+    sub.add_parser("daemon", help="run the RGB / OLED / wheel daemon").set_defaults(func=cmd_daemon)
     return p
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    args.func(args)
+    cfgmod.migrate()
+    try:
+        args.func(args)
+    except ApexError:
+        raise
+    except (OSError, RuntimeError) as exc:
+        raise ApexError(str(exc)) from exc
 
 
 if __name__ == "__main__":

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
+
+_CACHE_TTL = 1.5
+_cache = {"at": 0.0, "value": None}
 
 _DEST_RE = re.compile(r"org\.mpris\.MediaPlayer2\.[^\s'\",]+")
 
@@ -45,7 +49,7 @@ def _kv(blob, key):
     return ""
 
 
-def now_playing():
+def _query():
     for dest in _list_names():
         meta = _gdbus(
             "--dest", dest,
@@ -72,3 +76,14 @@ def now_playing():
                 "player": dest.rsplit(".", 1)[-1],
             }
     return {"title": "", "artist": "", "playing": False, "player": ""}
+
+
+def now_playing():
+    """Current track, cached briefly: the OLED polls this several times a second."""
+    now = time.monotonic()
+    if _cache["value"] is not None and now - _cache["at"] < _CACHE_TTL:
+        return _cache["value"]
+    value = _query()
+    _cache["value"] = value
+    _cache["at"] = now
+    return value

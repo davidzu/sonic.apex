@@ -1,4 +1,4 @@
-"""Load and save ~/.config/omarchy/apex.json."""
+"""Load and save the plugin's own config: ~/.config/omarchy/apex/config.json."""
 
 from __future__ import annotations
 
@@ -6,13 +6,17 @@ import json
 import os
 from copy import deepcopy
 
-CONFIG_PATH = os.path.expanduser("~/.config/omarchy/apex.json")
+CONFIG_DIR = os.path.expanduser("~/.config/omarchy/apex")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+LEGACY_CONFIG_PATH = os.path.expanduser("~/.config/omarchy/apex.json")
 PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _BUNDLED_LOGO = os.path.join(PLUGIN_ROOT, "assets", "omarchy_oled.png")
 _LEGACY_LOGO = os.path.expanduser("~/.config/omarchy/scripts/omarchy_oled.png")
 LOGO_PATH = _BUNDLED_LOGO if os.path.isfile(_BUNDLED_LOGO) else _LEGACY_LOGO
 THEME_COLORS = os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml")
-SOCKET_PATH = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "apexctl.sock")
+SOCKET_PATH = os.path.join(
+    os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "sonic-apex.sock"
+)
 
 DEFAULT = {
     "rgb": {
@@ -33,6 +37,10 @@ DEFAULT = {
     "wheel": {
         "mode": "volume",
         "invert": False,
+        # The keyboard exposes a pointer node for its roller. Grabbing it keeps
+        # wheel motion out of applications; disable if a mouse plugged into the
+        # Apex passthrough port stops working.
+        "grab_pointer": True,
     },
 }
 
@@ -47,6 +55,25 @@ def _merge(base, overlay):
         else:
             out[key] = value
     return out
+
+
+def migrate(path=CONFIG_PATH):
+    """Move the old flat config into the plugin's own directory once."""
+    if os.path.exists(path) or not os.path.exists(LEGACY_CONFIG_PATH):
+        return
+    try:
+        with open(LEGACY_CONFIG_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return
+    try:
+        save(_merge(DEFAULT, data), path)
+    except OSError:
+        return
+    try:
+        os.replace(LEGACY_CONFIG_PATH, LEGACY_CONFIG_PATH + ".migrated")
+    except OSError:
+        pass
 
 
 def load(path=CONFIG_PATH):

@@ -20,24 +20,29 @@ Panel {
     daemon: false
   })
 
-  readonly property var rgbModes: ["theme", "solid", "gradient", "wave", "breathe", "rainbow", "reactive", "off"]
-  readonly property var rgbProfiles: ["sunset", "ocean", "fire", "matrix", "cyberpunk", "aurora", "candy", "ice", "vaporwave", "gold"]
-  readonly property var oledPages: ["clock", "now-playing", "workspace", "logo", "text", "clear"]
-  readonly property var wheelModes: ["volume", "workspace", "brightness", "oled", "rgb"]
+  // Overwritten from `apexctl modes` so the panel never drifts from the CLI.
+  property var rgbModes: ["theme", "solid", "gradient", "wave", "breathe", "rainbow", "reactive", "off"]
+  property var rgbProfiles: ["sunset", "ocean", "fire", "matrix", "cyberpunk", "aurora", "candy", "ice", "vaporwave", "gold"]
+  property var oledPages: ["clock", "now-playing", "workspace", "logo", "text", "clear"]
+  property var wheelModes: ["volume", "workspace", "brightness", "oled", "rgb"]
 
   readonly property string pluginDir: Qt.resolvedUrl(".").toString().replace("file://", "").replace(/\/$/, "")
   readonly property string scriptDir: pluginDir + "/bin"
   readonly property string apexctl: scriptDir + "/apexctl"
 
-  property var queuedAction: null
+  property var actionQueue: []
+  property string lastError: ""
 
   function apex(args) {
     if (actionProc.running) {
       // A previous command is still finishing; queue this one so no click is
       // ever dropped.
-      root.queuedAction = args
+      var next = root.actionQueue.slice()
+      next.push(args)
+      root.actionQueue = next
       return
     }
+    root.lastError = ""
     actionProc.command = [root.apexctl].concat(args)
     actionProc.running = true
   }
@@ -53,13 +58,16 @@ Panel {
 
   Component.onCompleted: {
     if (!installProc.running) installProc.running = true
+    if (!modesProc.running) modesProc.running = true
     root.refresh()
   }
   onOpenedChanged: if (opened) root.refresh()
 
+  // Only poll while the panel is visible: a closed panel does not need a
+  // Python process every 2.5s.
   Timer {
     interval: 2500
-    running: true
+    running: root.opened
     repeat: true
     onTriggered: root.refresh()
   }
@@ -68,6 +76,23 @@ Panel {
     id: installProc
     command: ["bash", root.pluginDir + "/install", "--silent"]
     stdout: StdioCollector { waitForEnd: true }
+  }
+
+  Process {
+    id: modesProc
+    command: [root.apexctl, "modes"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var data = JSON.parse(String(text || "{}"))
+          if (data.rgbModes && data.rgbModes.length) root.rgbModes = data.rgbModes
+          if (data.profiles && data.profiles.length) root.rgbProfiles = data.profiles
+          if (data.oledPages && data.oledPages.length) root.oledPages = data.oledPages
+          if (data.wheelModes && data.wheelModes.length) root.wheelModes = data.wheelModes
+        } catch (e) { /* keep the built-in defaults */ }
+      }
+    }
   }
 
   Process {
@@ -87,11 +112,16 @@ Panel {
   Process {
     id: actionProc
     stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.lastError = String(text || "").trim()
+    }
     onRunningChanged: {
       if (running) return
-      if (root.queuedAction) {
-        var args = root.queuedAction
-        root.queuedAction = null
+      if (root.actionQueue.length > 0) {
+        var queue = root.actionQueue.slice()
+        var args = queue.shift()
+        root.actionQueue = queue
         root.apex(args)
       } else {
         root.refresh()
@@ -168,6 +198,17 @@ Panel {
               font.pixelSize: Style.font.caption
             }
           }
+        }
+
+        Text {
+          width: parent.width
+          visible: root.lastError.length > 0
+          wrapMode: Text.WordWrap
+          text: root.lastError
+          color: root.bar.foreground
+          opacity: 0.9
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
         }
 
         PanelSeparator { foreground: root.bar.foreground }

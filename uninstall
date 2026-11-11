@@ -1,7 +1,9 @@
 #!/bin/bash
-# Reverse install: stop the daemon, drop PATH symlink and hooks.
+# Reverse install: stop the daemon, drop PATH symlink, hooks, and install stamp.
 
 set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 systemctl --user disable --now apexctl.service >/dev/null 2>&1 || true
 rm -f "$HOME/.config/systemd/user/apexctl.service"
@@ -12,11 +14,21 @@ for dir in "$HOME/.local/bin" /usr/local/bin; do
   if [[ -L $target ]]; then
     rm -f "$target"
     echo "Removed $target"
+  elif [[ -e $target && $dir == "$HOME/.local/bin" ]]; then
+    # A real file (older installs copied instead of linking) is ours only if
+    # it points at this plugin's package.
+    if grep -q "from apex.cli import main" "$target" 2>/dev/null; then
+      rm -f "$target"
+      echo "Removed stale $target"
+    fi
   fi
 done
 
 rm -f "$HOME/.config/omarchy/hooks/theme-set.d/apply-keyboard-rgb"
 rm -f "$HOME/.config/omarchy/hooks/post-boot.d/apexctl"
+rm -rf "$HOME/.local/state/apex"
 
 echo "Done. Then run: omarchy plugin remove sonic.apex"
-echo "User config kept at ~/.config/omarchy/apex.json"
+echo "User config kept at ~/.config/omarchy/apex/config.json"
+echo "udev rules are system-wide; remove manually if you installed them:"
+echo "  sudo rm /etc/udev/rules.d/99-steelseries-apex.rules"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import select
@@ -22,6 +23,11 @@ from .layout import KEYCODE_TO_LED, OLED_PAGES, RGB_MODES, WHEEL_MODES
 
 RGB_FPS = 24
 OLED_MIN_DT = 0.12
+RESCAN_DT = 2.0
+RGB_RETRY_DT = 5.0
+MAX_CLIENT_BUFFER = 64 * 1024
+# Modes whose frame only changes when settings or the palette change.
+STATIC_MODES = frozenset({"theme", "solid", "off"})
 
 
 def _run(argv):
@@ -42,14 +48,25 @@ class Daemon:
         self.last_rgb = 0.0
         self.last_oled = 0.0
         self.last_palette = 0.0
+        self.last_rescan = 0.0
+        self.rgb_retry_at = 0.0
+        self.last_colors = None
         self.oled_hash = None
         self.wheel_devs = []
+        self.pointer_devs = []
         self.key_devs = []
+        self.decoders = {}
         self.server = None
         self.clients = []
         self.buf = {}
+        self.lock_fd = None
+
+    # -- lifecycle -------------------------------------------------------
 
     def start(self):
+        if not self._acquire_lock():
+            print("apexctl: another daemon owns the socket; exiting", file=sys.stderr, flush=True)
+            sys.exit(0)
         self._connect_rgb()
         self._open_inputs()
         self._listen()
@@ -62,25 +79,90 @@ class Daemon:
     def _stop(self, *_args):
         self.running = False
 
+    def _acquire_lock(self):
+        """Prevent a second daemon from stealing the socket and fighting over USB."""
+        path = cfgmod.SOCKET_PATH + ".lock"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        self.lock_fd = fd
+        return True
+
     def _connect_rgb(self):
         try:
             self.openrgb = rgbmod.OpenRGB()
+            self.last_colors = None
+            self.rgb_retry_at = 0.0
+            return True
         except (OSError, RuntimeError) as exc:
-            print(f"apexctl: OpenRGB unavailable ({exc})", file=sys.stderr)
+            print(f"apexctl: OpenRGB unavailable ({exc})", file=sys.stderr, flush=True)
             self.openrgb = None
+            self.rgb_retry_at = time.monotonic() + RGB_RETRY_DT
+            return False
+
+    # -- evdev -----------------------------------------------------------
 
     def _open_inputs(self):
         nodes = wheelmod.apex_event_nodes()
         for path in nodes["wheel"]:
-            try:
-                self.wheel_devs.append(wheelmod.Evdev(path, grab=False))
-            except OSError as exc:
-                print(f"apexctl: wheel {path}: {exc}", file=sys.stderr)
+            self._open_dev(self.wheel_devs, path)
+        for path in nodes["pointer"]:
+            self._open_dev(self.pointer_devs, path)
         for path in nodes["keys"]:
-            try:
-                self.key_devs.append(wheelmod.Evdev(path, grab=False))
-            except OSError:
-                pass
+            self._open_dev(self.key_devs, path)
+
+    def _open_dev(self, bucket, path):
+        if any(dev.path == path for dev in bucket):
+            return False
+        try:
+            bucket.append(wheelmod.Evdev(path, grab=False))
+            self.decoders[path] = wheelmod.WheelDecoder()
+            return True
+        except OSError as exc:
+            print(f"apexctl: {path}: {exc}", file=sys.stderr, flush=True)
+            return False
+
+    def _drop_dev(self, dev):
+        for bucket in (self.wheel_devs, self.pointer_devs, self.key_devs):
+            if dev in bucket:
+                bucket.remove(dev)
+        self.decoders.pop(dev.path, None)
+        try:
+            dev.close()
+        except OSError:
+            pass
+
+    def _rescan_inputs(self, now):
+        """Reopen nodes after a replug, dock drop, or suspend/resume."""
+        if now - self.last_rescan < RESCAN_DT:
+            return
+        self.last_rescan = now
+        nodes = wheelmod.apex_event_nodes()
+        opened = False
+        for path in nodes["wheel"]:
+            opened = self._open_dev(self.wheel_devs, path) or opened
+        for path in nodes["pointer"]:
+            opened = self._open_dev(self.pointer_devs, path) or opened
+        for path in nodes["keys"]:
+            opened = self._open_dev(self.key_devs, path) or opened
+        if opened:
+            self._apply_wheel_grab()
+
+    def _apply_wheel_grab(self):
+        grab = self.cfg["wheel"]["mode"] != "volume"
+        for dev in self.wheel_devs:
+            dev.set_grab(grab)
+        # Pointer grabbing is optional: a mouse in the passthrough port shares
+        # this node on some firmware revisions.
+        pointer_grab = grab and bool(self.cfg["wheel"].get("grab_pointer", True))
+        for dev in self.pointer_devs:
+            dev.set_grab(pointer_grab)
+
+    # -- socket ----------------------------------------------------------
 
     def _listen(self):
         sock_path = cfgmod.SOCKET_PATH
@@ -94,34 +176,37 @@ class Daemon:
         self.server.setblocking(False)
         os.chmod(sock_path, 0o600)
 
-    def _apply_wheel_grab(self):
-        grab = self.cfg["wheel"]["mode"] != "volume"
-        for dev in self.wheel_devs:
-            dev.set_grab(grab)
-
     def fds(self):
         out = [self.server] + self.clients
         out.extend(self.wheel_devs)
+        out.extend(self.pointer_devs)
         out.extend(self.key_devs)
         return out
 
     def loop(self):
         while self.running:
-            timeout = 1.0 / RGB_FPS
-            readable, _, _ = select.select(self.fds(), [], [], timeout)
+            try:
+                readable, _, _ = select.select(self.fds(), [], [], 1.0 / RGB_FPS)
+            except OSError:
+                # A closed fd raced select(); drop it and continue.
+                readable = []
             now = time.monotonic()
             for fd in readable:
                 if fd is self.server:
                     self._accept()
                 elif fd in self.clients:
                     self._on_client(fd)
-                elif fd in self.wheel_devs:
+                elif fd in self.wheel_devs or fd in self.pointer_devs:
                     self._on_wheel(fd)
                 elif fd in self.key_devs:
                     self._on_keys(fd)
             if now - self.last_palette > 2.0:
-                self.palette = rgbmod.load_palette()
+                palette = rgbmod.load_palette()
+                if palette != self.palette:
+                    self.palette = palette
+                    self.last_colors = None  # theme changed: redraw static modes
                 self.last_palette = now
+            self._rescan_inputs(now)
             self._decay_reactive(now)
             if now - self.last_rgb >= 1.0 / RGB_FPS:
                 self._push_rgb()
@@ -153,6 +238,10 @@ class Daemon:
             self._drop(conn)
             return
         self.buf[conn] += chunk
+        if len(self.buf[conn]) > MAX_CLIENT_BUFFER:
+            self._reply(conn, {"ok": False, "error": "request too large"})
+            self._drop(conn)
+            return
         while b"\n" in self.buf[conn]:
             line, self.buf[conn] = self.buf[conn].split(b"\n", 1)
             if not line.strip():
@@ -176,24 +265,34 @@ class Daemon:
             pass
 
     def _reply(self, conn, payload):
+        data = (json.dumps(payload) + "\n").encode("utf-8")
+        view = memoryview(data)
         try:
-            conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+            while view:
+                _, writable, _ = select.select([], [conn], [], 0.5)
+                if not writable:
+                    raise OSError("client write timeout")
+                sent = conn.send(view)
+                view = view[sent:]
         except OSError:
             self._drop(conn)
+
+    # -- state -----------------------------------------------------------
 
     def status(self):
         rgb_dev = None
         if self.openrgb:
             rgb_dev = self.openrgb.device[1]
+        hid = oled.find_oled_hidraw()
         return {
             "ok": True,
-            "connected": bool(self.openrgb) or bool(oled.find_oled_hidraw()),
+            "connected": bool(self.openrgb) or bool(hid),
             "device": rgb_dev or "SteelSeries Apex 7 TKL",
             "rgb": dict(self.cfg["rgb"]),
             "oled": dict(self.cfg["oled"]),
             "wheel": dict(self.cfg["wheel"]),
             "openrgb": bool(self.openrgb),
-            "oled_hid": oled.find_oled_hidraw(),
+            "oled_hid": hid,
         }
 
     def handle(self, req):
@@ -222,9 +321,13 @@ class Daemon:
         rgb = self.cfg["rgb"]
         if "mode" in req and req["mode"] in RGB_MODES:
             rgb["mode"] = req["mode"]
+        elif "mode" in req:
+            return {"ok": False, "error": f"unknown mode {req['mode']}"}
         if "solid" in req:
             rgb["solid"] = req["solid"]
-        if "profile" in req and req["profile"] in rgbmod.PROFILES:
+        if "profile" in req:
+            if req["profile"] not in rgbmod.PROFILES:
+                return {"ok": False, "error": f"unknown profile {req['profile']}"}
             rgb["profile"] = req["profile"]
         if "brightness" in req:
             rgb["brightness"] = int(max(0, min(100, int(req["brightness"]))))
@@ -245,6 +348,8 @@ class Daemon:
         elif req.get("prev"):
             self._cycle_oled(-1)
         elif "page" in req:
+            if req["page"] not in OLED_PAGES:
+                return {"ok": False, "error": f"unknown page {req['page']}"}
             oled_cfg["page"] = req["page"]
         if "text" in req:
             oled_cfg["text"] = req["text"]
@@ -259,10 +364,14 @@ class Daemon:
         return self.status()
 
     def _cmd_wheel(self, req):
-        if "mode" in req and req["mode"] in WHEEL_MODES:
+        if "mode" in req:
+            if req["mode"] not in WHEEL_MODES:
+                return {"ok": False, "error": f"unknown wheel mode {req['mode']}"}
             self.cfg["wheel"]["mode"] = req["mode"]
         if "invert" in req:
             self.cfg["wheel"]["invert"] = bool(req["invert"])
+        if "grab_pointer" in req:
+            self.cfg["wheel"]["grab_pointer"] = bool(req["grab_pointer"])
         cfgmod.save(self.cfg)
         self._apply_wheel_grab()
         return self.status()
@@ -280,12 +389,25 @@ class Daemon:
         current = self.cfg["rgb"]["mode"]
         idx = modes.index(current) if current in modes else 0
         self.cfg["rgb"]["mode"] = modes[(idx + delta) % len(modes)]
-        cfgmod.save(self.cfg)
+
+    # -- wheel -----------------------------------------------------------
+
+    def _dev_events(self, dev):
+        try:
+            return dev.read()
+        except wheelmod.DeviceGone:
+            self._drop_dev(dev)
+            return None
 
     def _on_wheel(self, dev):
-        events = dev.read()
-        rel_steps, key_steps, clicked = wheelmod.decode_wheel(
-            events, invert=self.cfg["wheel"]["invert"]
+        events = self._dev_events(dev)
+        if events is None:
+            return
+        decoder = self.decoders.setdefault(dev.path, wheelmod.WheelDecoder())
+        rel_steps, key_steps, clicked = decoder.feed(
+            events,
+            invert=self.cfg["wheel"]["invert"],
+            allow_pointer_buttons=dev in self.wheel_devs,
         )
         mode = self.cfg["wheel"]["mode"]
         # Volume mode does not grab the device, so KEY_VOLUME*/MUTE already
@@ -310,6 +432,7 @@ class Daemon:
             self._push_oled(force=True)
         elif mode == "rgb":
             self._cycle_rgb(1)
+            cfgmod.save(self.cfg)
             self._push_rgb(force=True)
         elif mode == "workspace":
             _run(["hyprctl", "dispatch", "togglespecialworkspace"])
@@ -317,16 +440,16 @@ class Daemon:
             _run(["omarchy", "brightness", "display", "off"])
 
     def _wheel_steps(self, mode, steps):
+        steps = int(steps)
+        if not steps:
+            return
+        count = abs(steps)
         if mode == "volume":
-            action = "raise" if steps > 0 else "lower"
-            for _ in range(abs(steps)):
-                _run(["omarchy", "audio", "output", "volume", action])
+            _run(["omarchy", "audio", "output", "volume", f"{'+' if steps > 0 else '-'}{count}"])
         elif mode == "workspace":
-            dispatch = "workspace e+1" if steps > 0 else "workspace e-1"
-            for _ in range(abs(steps)):
-                hypr.dispatch(dispatch)
+            hypr.dispatch(f"workspace e{'+' if steps > 0 else '-'}{count}")
         elif mode == "brightness":
-            delta = f"+{5 * abs(steps)}%" if steps > 0 else f"{5 * abs(steps)}%-"
+            delta = f"+{5 * count}%" if steps > 0 else f"-{5 * count}%"
             _run(["omarchy", "brightness", "display", delta])
         elif mode == "oled":
             self._cycle_oled(1 if steps > 0 else -1)
@@ -334,11 +457,17 @@ class Daemon:
             self._push_oled(force=True)
         elif mode == "rgb":
             self._cycle_rgb(1 if steps > 0 else -1)
+            cfgmod.save(self.cfg)
             self._push_rgb(force=True)
+
+    # -- rendering -------------------------------------------------------
 
     def _on_keys(self, dev):
         now = time.monotonic()
-        for etype, code, value in dev.read():
+        events = self._dev_events(dev)
+        if events is None:
+            return
+        for etype, code, value in events:
             if etype != 0x01 or value == 0:
                 continue
             name = KEYCODE_TO_LED.get(code)
@@ -356,11 +485,15 @@ class Daemon:
 
     def _push_rgb(self, force=False):
         if not self.openrgb:
-            if force:
-                self._connect_rgb()
-            if not self.openrgb:
+            if time.monotonic() < self.rgb_retry_at and not force:
+                return
+            if not self._connect_rgb():
                 return
         mode = self.cfg["rgb"]["mode"]
+        # Static modes do not animate: after the frame is on the device there is
+        # nothing to compute until settings, the palette, or a keypress change.
+        if not force and mode in STATIC_MODES and not self.reactive and self.last_colors is not None:
+            return
         ages = {k: time.monotonic() - ts for k, ts in self.reactive.items()}
         try:
             colors = rgbmod.effect_colors(
@@ -373,10 +506,23 @@ class Daemon:
                 profile=self.cfg["rgb"].get("profile"),
             )
             colors = rgbmod.apply_key_overrides(colors, self.cfg["rgb"].get("keys"))
-            self.openrgb.set_colors(colors)
         except (OSError, RuntimeError) as exc:
-            print(f"apexctl: rgb update failed: {exc}", file=sys.stderr)
+            print(f"apexctl: rgb update failed: {exc}", file=sys.stderr, flush=True)
+            return
+        # Static modes would otherwise re-send the same 112 LEDs 24 times a
+        # second, keeping the controller and the USB bus awake for nothing.
+        key = tuple(colors)
+        if not force and key == self.last_colors:
+            return
+        try:
+            self.openrgb.set_colors(colors)
+            self.last_colors = key
+        except (OSError, RuntimeError) as exc:
+            print(f"apexctl: rgb update failed: {exc}", file=sys.stderr, flush=True)
+            self.openrgb.close()
             self.openrgb = None
+            self.last_colors = None
+            self.rgb_retry_at = time.monotonic() + RGB_RETRY_DT
 
     def _oled_state(self):
         page = self.cfg["oled"]["page"]
@@ -401,11 +547,12 @@ class Daemon:
             oled.send_image(frame)
             self.oled_hash = digest
         except (OSError, FileNotFoundError) as exc:
+            self.oled_hash = None
             if force:
-                print(f"apexctl: oled update failed: {exc}", file=sys.stderr)
+                print(f"apexctl: oled update failed: {exc}", file=sys.stderr, flush=True)
 
     def shutdown(self):
-        for dev in self.wheel_devs + self.key_devs:
+        for dev in self.wheel_devs + self.pointer_devs + self.key_devs:
             dev.close()
         for conn in list(self.clients):
             self._drop(conn)
@@ -420,9 +567,15 @@ class Daemon:
             pass
         if self.openrgb:
             self.openrgb.close()
+        if self.lock_fd is not None:
+            try:
+                os.close(self.lock_fd)
+            except OSError:
+                pass
 
 
 def run():
+    cfgmod.migrate()
     daemon = Daemon()
     daemon.start()
     print("apexctl daemon ready", cfgmod.SOCKET_PATH, flush=True)

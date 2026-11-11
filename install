@@ -1,11 +1,16 @@
 #!/bin/bash
 # Install apexctl onto PATH, enable the user daemon, and register Omarchy hooks.
-# Idempotent. The bar widget runs this with --silent on first load.
+# Idempotent and cheap when nothing changed: the bar widget runs this on first
+# load, so it must not fork systemctl every time the plugin reloads.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$SCRIPT_DIR/bin/apexctl"
+UNIT_SRC="$SCRIPT_DIR/systemd/apexctl.service"
+UNIT_DEST="$HOME/.config/systemd/user/apexctl.service"
+STAMP_DIR="$HOME/.local/state/apex"
+STAMP="$STAMP_DIR/install.stamp"
 SILENT=0
 [[ "${1:-}" == "--silent" ]] && SILENT=1
 
@@ -25,9 +30,13 @@ link_cli() {
 }
 
 install_unit() {
-  local dest="$HOME/.config/systemd/user/apexctl.service"
   mkdir -p "$HOME/.config/systemd/user"
-  cp "$SCRIPT_DIR/systemd/apexctl.service" "$dest"
+  if [[ -e $UNIT_DEST ]] && ! cmp -s "$UNIT_SRC" "$UNIT_DEST"; then
+    # Keep the user's copy once, then install ours — the widget must not lose
+    # local hardening (restart limits, environment) silently.
+    [[ -e $UNIT_DEST.bak ]] || cp "$UNIT_DEST" "$UNIT_DEST.bak"
+  fi
+  cp "$UNIT_SRC" "$UNIT_DEST"
   systemctl --user daemon-reload
   systemctl --user enable --now apexctl.service >/dev/null
 }
@@ -38,22 +47,38 @@ install_hooks() {
   omarchy hook install post-boot "$SCRIPT_DIR/hooks/apexctl" >/dev/null
 }
 
+wanted_stamp() {
+  local version
+  version="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$SCRIPT_DIR/manifest.json" | head -1)"
+  echo "${version:-0} $(sha256sum "$UNIT_SRC" | cut -d' ' -f1)"
+}
+
+CURRENT="$(cat "$STAMP" 2>/dev/null || true)"
+WANTED="$(wanted_stamp)"
+
 if [[ ! -x $BIN ]]; then
   chmod +x "$BIN" "$SCRIPT_DIR/bin/apex/"*.py 2>/dev/null || true
   chmod +x "$BIN"
 fi
 
-if link_cli "$HOME/.local/bin"; then
-  say "Installed apexctl into $HOME/.local/bin"
-else
+if ! link_cli "$HOME/.local/bin"; then
   echo "Could not write $HOME/.local/bin/apexctl" >&2
   exit 1
+fi
+
+if [[ $CURRENT == "$WANTED" ]]; then
+  # Nothing to do; the symlink and the daemon are already in place.
+  (( SILENT )) || echo "apexctl already installed (${WANTED%% *})"
+  exit 0
 fi
 
 install_unit
 say "Enabled systemd --user apexctl.service"
 install_hooks
 say "Installed theme-set and post-boot hooks"
+
+mkdir -p "$STAMP_DIR"
+printf '%s\n' "$WANTED" > "$STAMP"
 
 # Hint if the OLED hidraw is present but not writable.
 if ! python3 - "$SCRIPT_DIR" >/dev/null 2>&1 <<'PY'
