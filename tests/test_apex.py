@@ -354,6 +354,63 @@ class RenderTests(unittest.TestCase):
             self.assertNotEqual(first, render.image_page(path).tobytes())
 
 
+class SocketLifecycleTests(unittest.TestCase):
+    """The socket file can be removed by plugin reloads or a stale instance."""
+
+    def setUp(self):
+        from apex import daemon
+
+        self.mod = daemon
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "apex.sock")
+        self.patch = mock.patch.object(daemon.cfgmod, "SOCKET_PATH", self.path)
+        self.patch.start()
+        with mock.patch.object(daemon.cfgmod, "load", return_value=config._merge(config.DEFAULT, {})):
+            self.d = daemon.Daemon()
+
+    def tearDown(self):
+        self.d.shutdown()
+        self.patch.stop()
+        self.tmp.cleanup()
+
+    def test_refuses_to_replace_a_live_socket(self):
+        other = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        other.bind(self.path)
+        other.listen(1)
+        try:
+            with self.assertRaises(SystemExit) as ctx:
+                self.d._listen()
+            self.assertEqual(ctx.exception.code, 0)
+        finally:
+            other.close()
+
+    def test_replaces_a_stale_socket(self):
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(self.path)
+        stale.close()  # socket file remains, nobody listening
+        self.assertTrue(os.path.exists(self.path))
+        self.d._listen()
+        self.assertIsNotNone(self.d.server)
+        self.assertTrue(os.path.exists(self.path))
+
+    def test_rebinds_when_the_socket_file_disappears(self):
+        self.d._listen()
+        os.unlink(self.path)
+        self.d._check_socket()
+        self.assertTrue(os.path.exists(self.path))
+
+    def test_rebind_accepts_connections(self):
+        self.d._listen()
+        os.unlink(self.path)
+        self.d._check_socket()
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            client.settimeout(2)
+            client.connect(self.path)  # the loop is not running here; connect is enough
+        finally:
+            client.close()
+
+
 class DaemonTests(unittest.TestCase):
     def setUp(self):
         from apex import daemon

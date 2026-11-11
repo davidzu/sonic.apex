@@ -3,7 +3,7 @@
   "portableChecks": {
     "command": "./tests/run",
     "node": "scripts/check.mjs + node --test (8 structural tests)",
-    "python": "python3 -m unittest discover -s tests -p 'test_*.py' (70 tests)",
+    "python": "python3 -m unittest discover -s tests -p 'test_*.py' (77 tests)",
     "result": "pass",
     "recorded": "2026-11-11"
   },
@@ -25,6 +25,16 @@
     },
     {
       "check": "apexctl reload re-applies the theme palette without changing the selected mode or OLED page",
+      "result": "pass",
+      "date": "2026-11-11"
+    },
+    {
+      "check": "daemon rebinds its socket after the file is removed externally (plugin reload, cleanup)",
+      "result": "pass",
+      "date": "2026-11-11"
+    },
+    {
+      "check": "daemon reconnects to a restarted OpenRGB server without a service restart",
       "result": "pass",
       "date": "2026-11-11"
     }

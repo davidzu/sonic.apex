@@ -60,6 +60,7 @@ class Daemon:
         self.clients = []
         self.buf = {}
         self.lock_fd = None
+        self.killing = False
 
     # -- lifecycle -------------------------------------------------------
 
@@ -141,6 +142,7 @@ class Daemon:
         if now - self.last_rescan < RESCAN_DT:
             return
         self.last_rescan = now
+        self._check_socket()
         nodes = wheelmod.apex_event_nodes()
         opened = False
         for path in nodes["wheel"]:
@@ -166,15 +168,45 @@ class Daemon:
 
     def _listen(self):
         sock_path = cfgmod.SOCKET_PATH
-        try:
-            os.unlink(sock_path)
-        except OSError:
-            pass
+        if os.path.exists(sock_path):
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.settimeout(0.5)
+            try:
+                probe.connect(sock_path)
+            except OSError:
+                pass  # stale socket from a dead daemon: safe to replace
+            else:
+                print("apexctl: a daemon is already serving this socket; exiting",
+                      file=sys.stderr, flush=True)
+                sys.exit(0)
+            finally:
+                probe.close()
+            try:
+                os.unlink(sock_path)
+            except OSError:
+                pass
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(sock_path)
         self.server.listen(8)
         self.server.setblocking(False)
         os.chmod(sock_path, 0o600)
+
+    def _check_socket(self):
+        """Rebind if something removed our socket file (plugin reload, cleanup)."""
+        if self.server is None or self.killing:
+            return
+        if os.path.exists(cfgmod.SOCKET_PATH):
+            return
+        try:
+            self.server.close()
+        except OSError:
+            pass
+        self.server = None
+        try:
+            self._listen()
+            print("apexctl: socket file vanished; rebound", file=sys.stderr, flush=True)
+        except OSError as exc:
+            print(f"apexctl: could not rebind socket: {exc}", file=sys.stderr, flush=True)
 
     def fds(self):
         out = [self.server] + self.clients
@@ -552,6 +584,7 @@ class Daemon:
                 print(f"apexctl: oled update failed: {exc}", file=sys.stderr, flush=True)
 
     def shutdown(self):
+        self.killing = True
         for dev in self.wheel_devs + self.pointer_devs + self.key_devs:
             dev.close()
         for conn in list(self.clients):
@@ -561,10 +594,9 @@ class Daemon:
                 self.server.close()
             except OSError:
                 pass
-        try:
-            os.unlink(cfgmod.SOCKET_PATH)
-        except OSError:
-            pass
+        # The socket file is intentionally left behind: unlinking by path could
+        # remove a replacement daemon's socket. The next start probes it and
+        # replaces it when nothing is listening.
         if self.openrgb:
             self.openrgb.close()
         if self.lock_fd is not None:
