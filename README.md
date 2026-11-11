@@ -79,7 +79,7 @@ CLI examples:
 apexctl rgb wave --speed 2
 apexctl rgb gradient -p ocean
 apexctl oled clock
-apexctl wheel mode workspace  # volume | workspace | brightness | oled | rgb
+apexctl wheel workspace     # volume | workspace | brightness | oled | rgb
 apexctl reload               # re-read the theme palette, keep current mode/page
 apexctl modes                # modes, pages, and profiles as JSON
 apexctl status --json
