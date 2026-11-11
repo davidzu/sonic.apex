@@ -18,5 +18,5 @@ jobs:
         with:
           node-version: "22"
       - name: Install Pillow for the renderer tests
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pil
+        run: python3 -m pip install --break-system-packages --quiet pillow
       - run: ./tests/run
