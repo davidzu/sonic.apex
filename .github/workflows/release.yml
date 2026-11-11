@@ -12,18 +12,34 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
+      - name: Install Pillow for the renderer tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-pil
       - run: ./tests/run
+      - name: Check the tag matches manifest.json
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' manifest.json | head -1)"
+          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "manifest.json version is $version but the tag is ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+      - name: Build the installable payload
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -czf "dist/sonic.apex-${GITHUB_REF_NAME}.tar.gz" \
+            manifest.json Panel.qml KeyboardGlyph.qml \
+            bin hooks systemd udev assets \
+            install uninstall README.md LICENSE CREDITS.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: plugin-source
-          path: |
-            manifest.json
-            Panel.qml
-            bin/
-            hooks/
-            systemd/
-            udev/
-            install/
-            uninstall/
-            README.md
-            LICENSE
+          path: dist/*.tar.gz
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Apex Keyboard ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*.tar.gz

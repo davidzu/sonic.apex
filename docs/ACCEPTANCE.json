@@ -1,6 +1,37 @@
 {
-  "omarchyVersion": null,
-  "portableChecks": null,
-  "liveChecks": [],
-  "notes": "No acceptance evidence recorded yet. Run ./tests/run, omarchy plugin validate ., and the live checks in docs/DEVELOPMENT.md, then fill this in."
+  "omarchyVersion": "4.5.0-3",
+  "portableChecks": {
+    "command": "./tests/run",
+    "node": "scripts/check.mjs + node --test (8 structural tests)",
+    "python": "python3 -m unittest discover -s tests -p 'test_*.py' (70 tests)",
+    "result": "pass",
+    "recorded": "2026-11-11"
+  },
+  "liveChecks": [
+    {
+      "check": "omarchy plugin validate .",
+      "result": "pass (exit 0, no diagnostics)",
+      "date": "2026-11-11"
+    },
+    {
+      "check": "bar widget loads and opens the panel (horizontal bar, right section)",
+      "result": "pass",
+      "date": "2026-11-11"
+    },
+    {
+      "check": "RGB mode, gradient profile, brightness, and OLED page actions apply over the apexctl daemon",
+      "result": "pass",
+      "date": "2026-11-11"
+    },
+    {
+      "check": "apexctl reload re-applies the theme palette without changing the selected mode or OLED page",
+      "result": "pass",
+      "date": "2026-11-11"
+    }
+  ],
+  "knownGaps": [
+    "Wheel modes are exercised through unit tests only; the physical roller was not re-verified on this host.",
+    "Vertical bar layout and monitor hotplug were not re-run for this release."
+  ],
+  "notes": "Portable checks and the installed validator pass on omarchy 4.5.0-3. Hardware-dependent wheel behaviour is covered by unit tests, not by a live capture."
 }

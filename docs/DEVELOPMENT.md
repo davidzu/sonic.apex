@@ -1,8 +1,16 @@
 # Develop and test the plugin
 
-Run `./tests/run` from the repository root (requires Node.js 22+; no npm
-install needed). On the target Omarchy machine run `omarchy plugin validate .`
-and record the installed `omarchy-version`.
+Run `./tests/run` from the repository root (requires Node.js 22+ and Python 3
+with Pillow; no npm install needed). It runs three layers:
+
+- `scripts/check.mjs` — template structure, links, CI policy
+- `node --test` — manifest/payload/version contracts
+- `python3 -m unittest discover -s tests` — colour maths, config migration,
+  event decoding, OLED framing, daemon request handling
+
+The Python suite needs no hardware: device access is mocked or bypassed.
+On the target Omarchy machine run `omarchy plugin validate .` and record the
+installed `omarchy-version`.
 
 Portable checks validate a deliberately narrow structural subset; the
 installed host's validator is authoritative.

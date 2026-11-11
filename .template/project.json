@@ -8,7 +8,7 @@
   "name": "Apex Keyboard",
   "author": "davidzu",
   "id": "io.github.davidzu.sonic_apex",
-  "description": "Control SteelSeries Apex 7 TKL RGB, OLED, and the scroll wheel from the Omarchy bar.",
+  "description": "Per-key RGB, the 128x40 OLED, and the scroll wheel of the SteelSeries Apex 7 / Apex 7 TKL, controlled from the Omarchy bar.",
   "year": "2026",
   "inspiration": "",
   "initialized": true
