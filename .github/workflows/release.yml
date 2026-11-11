@@ -28,6 +28,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           tar -czf "dist/sonic.apex-${GITHUB_REF_NAME}.tar.gz" \
+            --exclude='__pycache__' --exclude='*.pyc' --exclude='.pytest_cache' \
             manifest.json Panel.qml KeyboardGlyph.qml \
             bin hooks systemd udev assets \
             install uninstall README.md LICENSE CREDITS.md
