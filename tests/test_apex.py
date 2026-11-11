@@ -602,6 +602,32 @@ class DaemonTests(unittest.TestCase):
         self.assertEqual(effect.call_count, 1)
 
 
+    def test_device_gone_drops_the_node(self):
+        from apex import wheel as wheelmod
+
+        dev = mock.Mock(path="/dev/input/event98")
+        dev.read.side_effect = wheelmod.DeviceGone(dev.path)
+        self.d.key_devs.append(dev)
+        self.d._on_keys(dev)
+        self.assertNotIn(dev, self.d.key_devs)
+        self.assertNotIn(dev.path, self.d.decoders)
+
+    def test_rescan_reopens_a_dropped_device(self):
+        from apex import wheel as wheelmod
+
+        dev = mock.Mock(path="/dev/input/event99")
+        nodes = {"wheel": [], "pointer": [], "keys": ["/dev/input/event99"]}
+        with mock.patch.object(wheelmod, "apex_event_nodes", return_value=nodes), \
+             mock.patch.object(wheelmod, "Evdev", return_value=dev):
+            self.d._open_dev(self.d.key_devs, "/dev/input/event99")
+            self.assertIn(dev, self.d.key_devs)
+            self.d._drop_dev(dev)
+            self.assertNotIn(dev, self.d.key_devs)
+            self.d.last_rescan = 0.0
+            self.d._rescan_inputs(1e9)
+        self.assertIn(dev, self.d.key_devs)
+
+
 class CliTests(unittest.TestCase):
     def test_modes_json_matches_layout(self):
         from apex import cli
